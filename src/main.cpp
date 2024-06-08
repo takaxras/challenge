@@ -1,6 +1,7 @@
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <opencv2/videoio.hpp>
+#include <boost/interprocess/shared_memory_object.hpp>
 
 using namespace cv;
 using namespace std;
@@ -92,8 +93,33 @@ void processImage()
     waitKey(0);
 }
 
+void testBoost()
+{
+    namespace bi = boost::interprocess;
+    cout << "Creating shared memory object...\n";
+    bi::shared_memory_object shm_obj(
+        bi::create_only,
+        "shared_memory",
+        bi::read_write);
+
+    cout << "Opening shared memory object...\n";
+    bi::shared_memory_object shm_obj_2(
+        bi::open_only,
+        "shared_memory",
+        bi::read_only);
+
+    cout << "Deleting shared memory object...\n";
+    auto status = bi::shared_memory_object::remove("shared_memory");
+    status ? 
+        cout << "Deleting succeeded\n" :
+        cout << "Deleting failed\n";
+    cout << "Done\n";
+}
+
 int main()
 {
+    testBoost();
+
     if (!processCam())
         processImage();
  
