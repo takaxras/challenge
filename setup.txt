@@ -17,6 +17,10 @@ Step 4
   - g++ failed unwrapping 'pkg-config --cflags --libs opencv4' argument in VS Code tasks.json.
     Fell back to manual arguments list
 
+OpenCV simple UI lib
+https://github.com/Dovyski/cvui
+Downloaded cvui.h and added to src
+
 Boost
 sudo apt-get install libboost-all-dev
   - Add includes in 'c_cpp_properties.json' ("includePath": ["/usr/include/boost"])
