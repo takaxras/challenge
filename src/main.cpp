@@ -70,6 +70,7 @@ bool processCam()
             break;
     }
 
+    cout << "Done\n";
     return true;
 }
 
@@ -85,7 +86,9 @@ void processImage()
         return;
     }
 
+    cout << "Finding circles...\n";
     findCircles(imgLoaded);
+    cout << "Done\n";
     waitKey(0);
 }
 
