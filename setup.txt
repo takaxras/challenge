@@ -1,27 +1,49 @@
 Setting up working environment:
 
+---
 VS Code in WSL
 https://code.visualstudio.com/docs/cpp/config-wsl
 
+---
 C++ in WSL
 https://largecats.github.io/blog/2019/09/22/run-c-from-wsl-in-vs-code/
 
+---
 OpenCV
 Follow guide from (Copied locally as README_OpenCV_WSL.md):
 https://github.com/Eemilp/install-opencv-on-wsl?tab=readme-ov-file
+See more here:
+https://docs.opencv.org/4.x/d7/d9f/tutorial_linux_install.html
 Notes:
-Step 3
+Step 3 - git
   - Change 'git checkout 4.5.1' commands to latest version branch (e.g. 4.10.0)
+Step 3 - cmake changes:
+- avoid system-wide installation: CMAKE_INSTALL_PREFIX=$HOME/.local
+- use all cores, 12 in this case
+cmake -DCMAKE_BUILD_TYPE=RELEASE -D OPENCV_GENERATE_PKGCONFIG=ON -DOPENCV_ENABLE_NONFREE=ON -DENABLE_PRECOMPILED_HEADERS=OFF -DBUILD_opencv_legacy=OFF -DCMAKE_INSTALL_PREFIX=$HOME/.local ../opencv-4.x
+make -j12 #increasing the number will make building faster. Maximum value can be found by running nproc.
+
 Step 4
   - Add includes in 'c_cpp_properties.json' ("includePath": ["/usr/local/include/opencv4"])
   - g++ failed unwrapping 'pkg-config --cflags --libs opencv4' argument in VS Code tasks.json.
     Fell back to manual arguments list
 
+mkdir build
+cd build
+sudo make install
+
+---
 OpenCV simple UI lib
 https://github.com/Dovyski/cvui
 Downloaded cvui.h and added to src
 
+---
 Boost
 sudo apt-get install libboost-all-dev
   - Add includes in 'c_cpp_properties.json' ("includePath": ["/usr/include/boost"])
 
+---
+CMake
+cmake -B build
+cmake --build build
+./build/my-app
