@@ -2,17 +2,25 @@
 #include <future>
 #include <opencv2/opencv.hpp>
 #include <opencv2/videoio.hpp>
+#include <opencv2/video.hpp>
 #include <opencv2/features2d.hpp>
 
 using namespace cv;
 using namespace std;
 
-vector<KeyPoint> findCorners(Mat& image)
+static Mat ColorToGray(const Mat& image)
+{
+    Mat imageGS;
+    cvtColor(image, imageGS, COLOR_BGR2GRAY);
+    return imageGS;
+}
+
+// basic ORB keypoints detection - returns detected keypoints
+vector<KeyPoint> findCorners(const Mat& image)
 {
     cout << "Finding corners...\n";
 
-    Mat imageGrayscale;
-    cvtColor(image, imageGrayscale, COLOR_BGR2GRAY);
+    const auto imageGrayscale = ColorToGray(image);
 
     Mat corners;
     vector<KeyPoint> keypoints_object;
@@ -23,6 +31,75 @@ vector<KeyPoint> findCorners(Mat& image)
     return keypoints_object;
 }
 
+// optical flow calculation
+// tweaked snippet from 'https://docs.opencv.org/3.4/d4/dee/tutorial_optical_flow.html'
+vector<Point2f> calcOpticalFlow(
+    const Mat& framePrevious,
+    const Mat& frameCurrent,
+    Mat& mask,
+    const vector<Point2f>& pointsPrevious)
+{
+    vector<Point2f> pointsCurrent;
+
+    auto framePreviousGS = ColorToGray(framePrevious);
+    auto frameCurrentGS = ColorToGray(frameCurrent);
+    auto frameCopy = frameCurrent.clone();
+
+    // Calculate optical flow
+    vector<uchar> status;
+    vector<float> err;
+    TermCriteria criteria = TermCriteria((TermCriteria::COUNT) + (TermCriteria::EPS), 10, 0.03);
+    calcOpticalFlowPyrLK(
+        framePreviousGS,
+        frameCurrentGS,
+        pointsPrevious,
+        pointsCurrent,
+        status,
+        err,
+        Size(15,15),
+        2,
+        criteria);
+
+    // Create random colors
+    //TODO initialize only once outside of this function
+    vector<Scalar> colors;
+    RNG rng;
+    const auto maxPoints = 100;
+    for(int i = 0; i < maxPoints; i++)
+    {
+        int r = rng.uniform(0, 256);
+        int g = rng.uniform(0, 256);
+        int b = rng.uniform(0, 256);
+        colors.push_back(Scalar(r,g,b));
+    }
+
+    // store new best matches here - these will be returned to the main process
+    vector<Point2f> newGoodPoints;
+
+    // Visualization part
+    //TODO pack this in its own function
+    for(uint i = 0; i < pointsPrevious.size() || i < maxPoints; i++)
+    {
+        // Select good points
+        if(status[i] == 1)
+        {
+            newGoodPoints.push_back(pointsCurrent[i]);
+            // Draw the tracks
+            line(mask, pointsCurrent[i], pointsPrevious[i], colors[i], 2);
+            circle(frameCopy, pointsCurrent[i], 5, colors[i], -1);
+        }
+    }
+
+    Mat frameFlow;
+    add(frameCopy, mask, frameFlow);
+    imshow("Optical flow", frameFlow);
+
+    cout << newGoodPoints.size() << " good matches found\n";
+
+    return newGoodPoints;
+}
+
+// draws provided circles and centers on the provided image
 void drawCircles(Mat& image, const vector<Vec3f>& circles)
 {
     const auto nCircles = circles.size();
@@ -40,13 +117,16 @@ void drawCircles(Mat& image, const vector<Vec3f>& circles)
     }
 }
 
-vector<Vec3f> findCircles(Mat& image)
+// detect circles on an image and returns the detected circles parameters
+vector<Vec3f> findCircles(const Mat& image)
 {
     cout << "Finding circles...\n";
-    Mat imageGrayscale;
-    cvtColor(image, imageGrayscale, COLOR_BGR2GRAY);
+
+    const auto imageGrayscale = ColorToGray(image);
+
     Mat imageBlurred;
-    GaussianBlur(imageGrayscale, imageBlurred, Size(3, 3), 2, 2 );
+    GaussianBlur(imageGrayscale, imageBlurred, Size(3, 3), 2, 2);
+
     vector<Vec3f> circles;
     HoughCircles(
         imageBlurred,
@@ -60,9 +140,22 @@ vector<Vec3f> findCircles(Mat& image)
     return circles;
 }
 
+Mat ResetTrackingState(const Mat& frame, vector<Point2f>& points)
+{
+    auto frameGS = ColorToGray(frame);
+    goodFeaturesToTrack(frameGS, points, 100, 0.3, 7, Mat(), 7, false, 0.04);
+
+    // Create a mask image for drawing purposes
+    return Mat::zeros(frame.size(), frame.type());
+}
+
+// main camera capturing loop
 bool processCam()
 {
-    Mat frame;
+    Mat frameCurrent;
+    Mat framePrevious;
+    vector<Point2f> pointsPrevious;
+
     VideoCapture cap;
     cap.open(0);
 
@@ -76,22 +169,62 @@ bool processCam()
 
     cout << "Capturing...\n";
 
+    // initialize previous frame and features to bootstrap tracking
+    cap.read(framePrevious);
+
+    if (framePrevious.empty())
+    {
+        cerr << "ERROR! blank frame grabbed\n";
+        return false;
+    }
+
+    auto mask = ResetTrackingState(framePrevious, pointsPrevious);
+
+    auto processedFrames = 0;
+    const auto maxProcessedFrames = 5;
+
     while (true)
     {
-        cap.read(frame);
+        cap.read(frameCurrent);
 
-        if (frame.empty())
+        if (frameCurrent.empty())
         {
+            //TODO consider retrying a few times before giving up
             cerr << "ERROR! blank frame grabbed\n";
             break;
         }
 
-        auto f1 = async(findCircles,ref(frame));
-        auto f2 = async(findCorners,ref(frame));
+        // spawn parallel processes to handle various computations
+        auto f1 = async(findCircles,ref(frameCurrent));
+        auto f2 = async(findCorners,ref(frameCurrent));
+        auto f3 = async(
+            calcOpticalFlow,
+            ref(framePrevious),
+            ref(frameCurrent),
+            ref(mask),
+            pointsPrevious);
 
-        drawCircles(frame, f1.get());
-        drawKeypoints(frame, f2.get(), frame, cv::Scalar(0,255,255));
-        imshow("Boom", frame);
+        // retrieve and use results from the other processes when available
+        auto frameCopy = frameCurrent.clone();
+        drawCircles(frameCopy, f1.get());
+        drawKeypoints(frameCopy, f2.get(), frameCopy, cv::Scalar(0,255,255));
+
+        //TODO pack this in its own function/class
+        {
+            pointsPrevious = f3.get();
+            framePrevious = frameCurrent.clone();
+
+            // prevent tracking for too long
+            if (++processedFrames == maxProcessedFrames)
+            {
+                cout << "Resetting tracking state...\n";
+                processedFrames = 0;
+                mask = ResetTrackingState(framePrevious, pointsPrevious);
+            }
+        }
+
+        //TODO merge this with optical flow view
+        imshow("Live view", frameCopy);
 
         if (waitKey(5) >= 0)
             break;
@@ -101,6 +234,7 @@ bool processCam()
     return true;
 }
 
+// fall back function for testing algorithms on a static image
 void processImage()
 {
     cout << "Loading image...\n";
